@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"regexp"
 	"sort"
@@ -181,8 +182,8 @@ func runScan(cmd *cobra.Command, arg string, f *scanFlags) error {
 		enriched = enrich(matches)
 	}
 
-	var subdomains []string
-	needIndex := !f.noSpiders || len(f.apexes) > 0
+	var heapIndex *heap.Index
+	needIndex := !f.noSpiders || len(f.apexes) > 0 || !f.offline
 
 	if needIndex {
 		t0 := time.Now()
@@ -193,6 +194,7 @@ func runScan(cmd *cobra.Command, arg string, f *scanFlags) error {
 				dimOnly(!f.noColor), err, resetOnly(!f.noColor))
 		} else {
 			defer mi.Close()
+			heapIndex = mi.Index
 			if !f.noSpiders {
 				for _, sp := range spiders.Registry() {
 					spiderFindings = append(spiderFindings, sp.Sniff(mi.Index)...)
@@ -201,9 +203,6 @@ func runScan(cmd *cobra.Command, arg string, f *scanFlags) error {
 				spiderFindings = spiders.TagDefaultAndWeak(spiderFindings)
 				sortSpiderFindings(spiderFindings)
 			}
-			if len(f.apexes) > 0 {
-				subdomains = extractSubdomainsFromIndex(mi.Index, f.apexes)
-			}
 		}
 		spiderElapsed = time.Since(t0)
 	}
@@ -211,6 +210,14 @@ func runScan(cmd *cobra.Command, arg string, f *scanFlags) error {
 	var verifyReport *verify.Report
 	if !f.offline {
 		hosts, jwts, creds, oauthTargets := collectVerificationTargets(enriched, spiderFindings)
+		// Apex enumeration: derive registrable apexes from discovered
+		// hosts (so users get subdomains without needing --domain),
+		// merge with any explicit --domain values, drop CDN/noise.
+		apexes := mergeApexes(deriveAutoApexes(hosts), f.apexes)
+		var subdomains []string
+		if heapIndex != nil && len(apexes) > 0 {
+			subdomains = extractSubdomainsFromIndex(heapIndex, apexes)
+		}
 		if len(hosts) > 0 || len(jwts) > 0 || len(creds) > 0 || len(oauthTargets) > 0 || len(subdomains) > 0 {
 			overall := f.timeout * time.Duration(len(hosts)+len(jwts)+len(creds)+len(oauthTargets)+len(subdomains)+4)
 			if overall < 15*time.Second {
@@ -390,12 +397,11 @@ func extractOAuthTargets(sf spiders.Finding) []verify.OAuthTarget {
 	return out
 }
 
-// extractSubdomainsFromIndex walks the heap string table + every
-// java.lang.String instance, regex-matches hostnames whose suffix is
-// one of the configured apex domains, and returns the deduplicated
-// sorted list. Apex-filtered enumeration gives a pentester the attack
-// surface beyond OSINT — CT logs, search indexes, bruteforce — since
-// internal staging names often only exist inside the dump.
+// extractSubdomainsFromIndex walks everywhere text-shaped bytes can
+// live in a heap dump — the UTF-8 intern table, every java.lang.String
+// instance, and every byte[] that could be an HTTP response body or
+// serialization buffer — and pulls out hostnames whose suffix matches
+// one of the apex domains.
 func extractSubdomainsFromIndex(idx *heap.Index, apexes []string) []string {
 	normalized := normalizeApexes(apexes)
 	if len(normalized) == 0 {
@@ -408,12 +414,15 @@ func extractSubdomainsFromIndex(idx *heap.Index, apexes []string) []string {
 			return
 		}
 		low := strings.ToLower(s)
-		for _, m := range re.FindAllString(low, -1) {
-			m = strings.Trim(m, ".-")
-			if m == "" || !isPlausibleHostname(m) {
+		for _, sub := range re.FindAllStringSubmatch(low, -1) {
+			if len(sub) < 2 {
 				continue
 			}
-			seen[m] = true
+			host := strings.Trim(sub[1], ".-")
+			if host == "" || !isPlausibleHostname(host) {
+				continue
+			}
+			seen[host] = true
 		}
 	}
 	for _, s := range idx.Strings {
@@ -426,12 +435,122 @@ func extractSubdomainsFromIndex(idx *heap.Index, apexes []string) []string {
 			}
 		}
 	}
+	// Primitive arrays that aren't a String.value: HTTP response bodies,
+	// serialization blobs, log ring-buffers, StringBuilder backing.
+	// byte[] is UTF-8, char[] is UTF-16BE (HPROF multibyte primitives
+	// are big-endian). Size capped at 16 MiB per array to skip giant
+	// class bytecode / image blobs where regex would waste time.
+	const maxArrayBytes = 16 << 20
+	for _, arr := range idx.PrimArrays {
+		n := len(arr.Elements)
+		if n == 0 || n > maxArrayBytes {
+			continue
+		}
+		switch arr.ElementType {
+		case hprof.PrimByte:
+			consume(string(arr.Elements))
+		case hprof.PrimChar:
+			consume(decodeUTF16BEBytes(arr.Elements))
+		}
+	}
 	out := make([]string, 0, len(seen))
 	for k := range seen {
 		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out
+}
+
+// decodeUTF16BEBytes converts HPROF-encoded char[] bytes (big-endian
+// UTF-16 per HPROF spec) into a Go string.
+func decodeUTF16BEBytes(b []byte) string {
+	if len(b) < 2 {
+		return ""
+	}
+	n := len(b) / 2
+	runes := make([]rune, 0, n)
+	for i := 0; i < n; i++ {
+		hi := uint16(b[i*2])
+		lo := uint16(b[i*2+1])
+		runes = append(runes, rune(hi<<8|lo))
+	}
+	return string(runes)
+}
+
+// deriveAutoApexes extracts the registrable apex (last two labels) from
+// every host seen in findings, dropping CDN/PaaS noise and junk.
+// Called without --domain so a plain `cyberheap scan` still enumerates
+// subdomains for whatever apexes actually appear in the dump.
+func deriveAutoApexes(hosts []verify.Host) []string {
+	seen := map[string]bool{}
+	for _, h := range hosts {
+		apex := registrableApex(h.Host)
+		if apex == "" || cdnApexBlacklist[apex] {
+			continue
+		}
+		seen[apex] = true
+	}
+	out := make([]string, 0, len(seen))
+	for a := range seen {
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mergeApexes dedupes explicit and auto-derived apex lists.
+func mergeApexes(auto, manual []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(auto)+len(manual))
+	for _, a := range append(auto, manual...) {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+// registrableApex returns the last two labels of a hostname. Good
+// enough heuristic for most TLDs; users facing multi-label ccTLDs
+// (.co.uk, .com.au) can pass --domain explicitly.
+func registrableApex(host string) string {
+	if host == "" || net.ParseIP(host) != nil {
+		return ""
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	// Drop numeric-only last label (IP octet slipping through).
+	allDigits := true
+	for _, r := range last {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return ""
+	}
+	return parts[len(parts)-2] + "." + last
+}
+
+// cdnApexBlacklist: well-known third-party CDN/PaaS apexes that every
+// Spring Boot app depends on. Enumerating them yields 10k+ unrelated
+// hostnames and drowns out real intel.
+var cdnApexBlacklist = map[string]bool{
+	"amazonaws.com": true, "cloudfront.net": true,
+	"googleapis.com": true, "gstatic.com": true, "google.com": true,
+	"cloudflare.com": true, "cloudflare.net": true,
+	"akamai.net": true, "akamaihd.net": true, "akamaiedge.net": true,
+	"azurewebsites.net": true, "azure.com": true, "microsoftonline.com": true,
+	"github.com": true, "githubusercontent.com": true,
+	"w3.org": true, "example.com": true, "example.org": true,
+	"localhost": true,
 }
 
 func normalizeApexes(in []string) []string {
@@ -455,7 +574,16 @@ func buildApexRegex(apexes []string) *regexp.Regexp {
 	for i, a := range apexes {
 		quoted[i] = regexp.QuoteMeta(a)
 	}
-	return regexp.MustCompile(`\b(?:[a-z0-9][a-z0-9-]{0,62}\.)*(?:` + strings.Join(quoted, "|") + `)\b`)
+	// Explicit non-hostname boundaries around the capture. \b on byte[]
+	// buffers fires on every 0x00 / binary byte, producing truncated
+	// matches like "aactions-test.halykfinance.kz" (missing the leading
+	// "m" because a null byte before it looks like a non-word). Using
+	// [^a-z0-9._-] as the boundary is stricter: only real separators
+	// (punctuation, whitespace, control bytes the class doesn't include)
+	// can flank a hostname.
+	pat := `(?:^|[^a-z0-9._-])((?:[a-z0-9][a-z0-9-]{0,62}\.)*(?:` +
+		strings.Join(quoted, "|") + `))(?:$|[^a-z0-9._-])`
+	return regexp.MustCompile(pat)
 }
 
 // isPlausibleHostname rejects matches whose last label is mixed-case
