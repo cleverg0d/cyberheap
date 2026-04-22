@@ -94,9 +94,18 @@ Runs both regex and structured passes by default and merges the findings.
 | `--no-spiders`     | Skip the structured pass (regex only) |
 | `--no-header-check`| Scan any file as raw bytes (for corrupted or non-standard dumps) |
 | `-o, --output DIR` | Save/merge findings as JSON into `DIR/<target>.json` |
-| `--format f`       | `pretty` (default) or `json` |
+| `--format f`       | `pretty` (default), `json`, or `markdown` |
+| `--patterns FILE`  | Load extra regex rules from a gitleaks-compatible TOML file (repeatable) |
+| `--patterns-only`  | Use ONLY `--patterns` files, skip the built-in catalogue |
+| `--diff-against FILE` | Compare against a saved JSON report — tag findings `+` / `=` / `-` |
 | `--no-color`       | Disable ANSI colors |
 | `--no-banner`      | Suppress the banner |
+
+Auto-selected paths (no flag needed):
+
+- **regex pass** streams in 64 MiB chunks with 16 KiB overlap when the dump is ≥ 512 MiB.
+- **structured pass** mmap's the file zero-copy when the dump is ≥ 256 MiB local.
+- Both fall back to the in-memory path on smaller dumps or remote URLs.
 
 ### `info` — inspect dump metadata
 
@@ -167,7 +176,10 @@ cyberheap decrypt jwt   --auto --token=<jwt> --try-secret=A --try-secret=B
 
 Supported:
 
-- **Jasypt** — `PBEWithMD5AndDES`, `PBEWithMD5AndTripleDES`, `PBEWithSHA1AndDESede`. Reverses the `StandardPBEStringEncryptor` / `PooledPBEStringEncryptor` pipeline (PBKDF1-MD5, DES/3DES-CBC, PKCS#5).
+- **Jasypt** — nine profiles covering Jasypt 1.x (PBKDF1-MD5/SHA1 with DES / 3DES) and Jasypt 3.x (PBKDF2 + AES). Full list:
+  `PBEWithMD5AndDES`, `PBEWithMD5AndTripleDES`, `PBEWithSHA1AndDESede`,
+  `PBEWithHMACSHA1AndAES_128/256`, `PBEWithHMACSHA256AndAES_128/256`,
+  `PBEWithHMACSHA512AndAES_128/256` (Jasypt 3.x default).
 - **Shiro RememberMe** — AES-128/192/256 in both CBC (Shiro ≤ 1.2.4, CVE-2016-4437) and GCM (newer Shiro). `--auto` tries every hard-coded default key shipped with the vulnerable releases plus any extras the `shiro` spider harvested from the heap.
 - **JWT** — full verification for HS256/384/512 (HMAC), RS256/384/512
   (RSA-PKCS1v15), PS256/384/512 (RSA-PSS), ES256/384/512 (ECDSA over
@@ -178,7 +190,24 @@ Supported:
 
 All subcommands accept `--json` for machine-readable output.
 
-### `strings` — placeholder for Phase 4 string-dump mode.
+### `strings` — dump Java-resolvable strings
+
+```sh
+cyberheap strings FILE                            # every resolved java.lang.String + STRING_IN_UTF8
+cyberheap strings FILE --grep=password --unique   # case-insensitive filter + dedup
+cyberheap strings FILE --regex='(?i)api[_-]?key'  # Go regex filter
+cyberheap strings FILE --include=utf8             # only intern'd constants
+cyberheap strings FILE --include=instances        # only runtime java.lang.String
+cyberheap strings FILE --ascii --min-length=8     # printable ASCII, ≥ 8 chars
+cyberheap strings FILE --sort=freq --unique       # top-used strings first
+cyberheap strings FILE --scan                     # run the secret catalogue ONLY over resolved strings
+                                                  # (cleaner signal than `scan`, no binary noise)
+```
+
+`--scan` is a pentest power move: the regex catalogue runs against the
+real string objects instead of raw heap bytes, so every match is a
+concrete Java string — no partial byte matches, no accidental hits on
+serialized blobs.
 
 ---
 
@@ -270,6 +299,39 @@ cyberheap scan ./heapdump --no-regex --severity=critical,high
 
 On a 100 MiB dump this runs in ~700 ms and surfaces DataSource/Shiro
 credentials without the regex noise.
+
+### Custom regex rules (gitleaks-compat TOML)
+
+Drop a rules file into the engagement directory, load it alongside the
+built-in catalogue, and tighten it with an allowlist:
+
+```toml
+# custom-rules.toml
+[[rules]]
+id          = "acme-internal-token"
+description = "Acme internal service token"
+regex       = '''\bacme_tok_[A-Za-z0-9]{32}\b'''
+severity    = "CRITICAL"
+category    = "credentials"
+
+[[rules]]
+id       = "acme-cloud-key"
+regex    = '''\bAKEY-[A-Z0-9]{20}\b'''
+severity = "HIGH"
+
+[rules.allowlist]
+regexes   = ['''EXAMPLE''', '''DEMO''']
+stopwords = ["fake", "placeholder"]
+```
+
+```sh
+cyberheap scan ./heapdump --patterns=./custom-rules.toml
+cyberheap scan ./heapdump --patterns=./custom-rules.toml --patterns-only
+```
+
+`keywords`, `entropy`, and `allowlist.paths` from gitleaks are parsed
+but reported as warnings — CyberHeap doesn't need them (RE2 is fast
+enough; paths aren't a dimension of heap data).
 
 ---
 
@@ -480,15 +542,17 @@ extending `HikariConfig`) don't double-report the same object.
 
 ## Limitations
 
-- Current release reads the full dump into memory. Tested on dumps up to
-  2 GiB; dumps above that benefit from mmap/streaming, planned for a future
-  release.
 - On actively-running pools, some Hikari pool objects null out their
-  password field after `pool.start()`. The real credential is kept in the
-  corresponding `DataSourceProperties` object, which CyberHeap reports
-  correctly; the dedup logic prevents double-counting.
-- Jasypt 3.x modes based on PBKDF2 + HMAC-SHA (`PBEWITHHMACSHA512ANDAES_256`)
-  are not yet supported — Jasypt 1.x defaults are covered.
+  password field after `pool.start()`. The real credential is kept in
+  the corresponding `DataSourceProperties` object, which CyberHeap
+  reports correctly; the dedup logic prevents double-counting.
+- HPROF 1.0.0 (pre-Java 5) is not supported. All modern JVMs emit 1.0.1
+  or 1.0.2.
+- The structured pass currently keeps the index in RAM. On the mmap
+  path (≥ 256 MiB files) the OS pages only what we touch, so peak
+  working set stays well below the dump size — but an exhaustive walk
+  of a multi-GiB dump still burns GiB of RAM. Suitable for every
+  heap-dump size we've encountered in real pentest engagements.
 
 ---
 
