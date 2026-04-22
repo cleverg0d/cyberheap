@@ -11,6 +11,8 @@ required, no Eclipse MAT, no manual grepping.
         HPROF secret scanner · by clevergod
 ```
 
+![CyberHeap scanning Shiro CVE-2016-4437 heap dump](docs/img/shiro-ctf.png)
+
 Every run produces two blocks:
 
 1. **Executive Summary** — target meta, severity tally, ranked risk
