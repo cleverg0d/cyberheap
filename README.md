@@ -190,7 +190,7 @@ cyberheap strings FILE --scan                # run secret catalogue only over re
 ```
 $ cyberheap scan ./heapdump
 ╔════════════════════════════════════════════════════╗
-║  v0.1.3  ·  HPROF secret scanner  ·  by clevergod  ║
+║  v0.1.4  ·  HPROF secret scanner  ·  by clevergod  ║
 ╚════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ EXECUTIVE SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

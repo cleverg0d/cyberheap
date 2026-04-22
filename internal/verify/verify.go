@@ -38,6 +38,11 @@ type HostStatus struct {
 	TCPOpen    bool
 	TCPErr     string
 	Verdict    HostVerdict
+	// Wildcard is true when this host resolves to an IP shared by
+	// multiple other hostnames — usually a DNS wildcard (*.apex) or
+	// a parking / catch-all answer. Flagged so the operator doesn't
+	// chase ghost targets.
+	Wildcard bool
 }
 
 // JWTStatus is the parsed-claims view. Signature is NOT verified.
@@ -224,6 +229,47 @@ func Run(ctx context.Context, hosts []Host, jwts []string, creds []CredTarget, o
 		if st, ok := report.Hosts[h.Key()]; ok {
 			report.HostByRaw[h.Raw] = st
 		}
+	}
+
+	// Wildcard detection: count how many distinct hostnames resolve to
+	// each IP across both finding-hosts and subdomain-enum. If ≥ 3 share
+	// one IP, mark those entries as wildcard so the operator ignores
+	// ghost targets (DNS *.apex catch-all).
+	ipHosts := map[string]map[string]bool{}
+	track := func(st *HostStatus) {
+		if st == nil {
+			return
+		}
+		for _, ip := range st.IPs {
+			if _, ok := ipHosts[ip]; !ok {
+				ipHosts[ip] = map[string]bool{}
+			}
+			ipHosts[ip][st.Host.Host] = true
+		}
+	}
+	for _, st := range report.Hosts {
+		track(st)
+	}
+	for _, st := range report.Subdomains {
+		track(st)
+	}
+	const wildcardThreshold = 3
+	mark := func(st *HostStatus) {
+		if st == nil {
+			return
+		}
+		for _, ip := range st.IPs {
+			if len(ipHosts[ip]) >= wildcardThreshold {
+				st.Wildcard = true
+				break
+			}
+		}
+	}
+	for _, st := range report.Hosts {
+		mark(st)
+	}
+	for _, st := range report.Subdomains {
+		mark(st)
 	}
 
 	for _, raw := range jwts {

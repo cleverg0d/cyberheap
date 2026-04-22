@@ -1536,6 +1536,9 @@ func printVerifySection(w io.Writer, rep *verify.Report, f *scanFlags) {
 		if st.DNSErr != "" && len(st.IPs) == 0 {
 			trail = append(trail, "("+st.DNSErr+")")
 		}
+		if st.Wildcard {
+			trail = append(trail, "(wildcard)")
+		}
 		if len(trail) > 0 {
 			line += "   " + dim + strings.Join(trail, "  ") + reset
 		}
@@ -1586,6 +1589,9 @@ func printVerifySection(w io.Writer, rep *verify.Report, f *scanFlags) {
 				line += "   " + dim + strings.Join(st.IPs, ",") + reset
 			case st.DNSErr != "":
 				line += "   " + dim + "(" + st.DNSErr + ")" + reset
+			}
+			if st.Wildcard {
+				line += "   " + dim + "(wildcard)" + reset
 			}
 			fmt.Fprintln(w, line)
 		}
