@@ -45,10 +45,12 @@ Two scan passes feed both:
   tokens, plus OAuth2 `client_credentials` / OIDC userinfo /
   HTTP Basic against endpoints discovered in the dump (public
   endpoints only, one attempt per credential).
-- **Subdomain enumeration** — `--domain apex` harvests every
-  matching hostname from heap strings and resolves each one, giving
-  the attack surface beyond OSINT (internal staging mirrors, test
-  realms, private subdomains).
+- **Subdomain enumeration** — apex domains are **auto-derived** from
+  every hostname discovered in findings (no flag needed). The scanner
+  then harvests every matching hostname from heap strings, byte[] /
+  char[] buffers (HTTP response bodies, serialization blobs,
+  StringBuilder backings) and resolves each one. Use `--domain apex`
+  to add extra apexes outside the finding set.
 - **Default / weak credential tagging** — `admin/admin`, `root/root`,
   `tomcat/tomcat`, `postgres/postgres`, …  are tagged `[DEFAULT CREDS]`.
   Known-weak passwords (`password`, `qwerty`, `secret`, `Qwerty`,
@@ -113,7 +115,7 @@ against the service that issued them.
 | `--verify-creds`      | Actively validate each cred/token against its service (1 attempt, public endpoints only) |
 | `--dns SERVER`        | DNS server for resolution (default `1.1.1.1`) |
 | `--timeout DURATION`  | Per-lookup timeout for DNS/TCP/HTTP (default `5s`) |
-| `--domain apex`       | Enumerate and resolve subdomains of this apex found in heap strings (repeatable, comma-separated) |
+| `--domain apex`       | Add apex domain(s) for subdomain enumeration. Auto-derived from finding hosts by default — only needed for apexes outside the dump's host set (repeatable, comma-separated) |
 | `--diff-against FILE` | Compare against earlier JSON — tag findings `+` / `=` / `-` |
 
 Respects the `NO_COLOR` environment variable. Advanced flags for pass
@@ -186,9 +188,9 @@ cyberheap strings FILE --scan                # run secret catalogue only over re
 > appears in this repository.
 
 ```
-$ cyberheap scan ./heapdump --domain example.com
+$ cyberheap scan ./heapdump
 ╔════════════════════════════════════════════════════╗
-║  v0.1.2  ·  HPROF secret scanner  ·  by clevergod  ║
+║  v0.1.3  ·  HPROF secret scanner  ·  by clevergod  ║
 ╚════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ EXECUTIVE SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
