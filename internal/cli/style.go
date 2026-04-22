@@ -56,7 +56,7 @@ func sevStyle(sev scanner.Severity, noColor bool) (string, string) {
 	case scanner.SeverityLow:
 		return cBGreen, cReset
 	case scanner.SeverityInfo:
-		return cBBlue, cReset
+		return cDim, cReset
 	default:
 		return cDim, cReset
 	}

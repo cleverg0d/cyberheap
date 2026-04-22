@@ -55,7 +55,7 @@ func (s *jasyptSpider) Sniff(idx *heap.Index) []Finding {
 				}
 				out = append(out, Finding{
 					Spider:   "jasypt",
-					Severity: SeverityCritical,
+					Severity: SeverityHigh,
 					Category: "credentials",
 					Title:    "Jasypt master password (decrypts every ENC(...) value)",
 					ClassFQN: cls.Name,

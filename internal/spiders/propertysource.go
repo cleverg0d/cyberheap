@@ -1,6 +1,7 @@
 package spiders
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/cleverg0d/cyberheap/internal/heap"
@@ -89,23 +90,52 @@ func (s *propertySourceSpider) Sniff(idx *heap.Index) []Finding {
 					}
 				}
 
-				var fields []Field
+				// Group keys by dotted prefix: a prefix is "secret" if any
+				// of its keys match secretKeyHints. Emit the secret key plus
+				// companion keys (login/url/clientId/scope) under the same
+				// prefix so the OAuth block travels together.
+				type kvPair struct{ k, v string }
+				var pairs []kvPair
 				walkMapLike(idx, mapInst, func(k, v heap.Value) bool {
 					key, ok := idx.ReadString(k.ObjectID)
-					if !ok || !looksSecretKey(key) {
+					if !ok {
 						return true
 					}
 					val := readPropertyValue(idx, v)
 					if val == "" {
 						return true
 					}
-					fields = append(fields, Field{Name: key, Value: val})
+					pairs = append(pairs, kvPair{key, val})
 					return true
 				})
 
+				secretPrefixes := map[string]bool{}
+				for _, p := range pairs {
+					if looksSecretKey(p.k) {
+						secretPrefixes[propertyPrefix(p.k)] = true
+					}
+				}
+				if len(secretPrefixes) == 0 {
+					continue
+				}
+
+				var fields []Field
+				for _, p := range pairs {
+					if !secretPrefixes[propertyPrefix(p.k)] {
+						continue
+					}
+					if !looksSecretKey(p.k) && !looksCompanionKey(p.k) {
+						continue
+					}
+					fields = append(fields, Field{Name: p.k, Value: p.v})
+				}
 				if len(fields) == 0 {
 					continue
 				}
+				// Alphabetical sort keeps same-prefix keys contiguous.
+				sort.SliceStable(fields, func(i, j int) bool {
+					return fields[i].Name < fields[j].Name
+				})
 				title := "Spring PropertySource"
 				if srcName != "" {
 					title = "Spring PropertySource: " + srcName
@@ -169,6 +199,44 @@ func looksSecretKey(k string) bool {
 	lk := strings.ToLower(k)
 	for _, h := range secretKeyHints {
 		if strings.Contains(lk, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// propertyPrefix returns the dotted prefix of a Spring property key
+// (everything before the last '.'). Used for grouping related entries.
+func propertyPrefix(k string) string {
+	if i := strings.LastIndexByte(k, '.'); i > 0 {
+		return k[:i]
+	}
+	return ""
+}
+
+// companionKeySuffixes match the final dotted segment (lowercased,
+// hyphens/underscores stripped). Kept tight to avoid noise like
+// ".subject" / ".enabled" / ".format".
+var companionKeySuffixes = []string{
+	"username", "user", "userid", "login", "email", "account", "principal",
+	"clientid", "clientname",
+	"host", "hostname", "server", "endpoint", "address",
+	"url", "uri", "baseurl", "endpointurl",
+	"scope", "realm", "issuer", "audience", "granttype", "grantflow",
+	"database", "schema", "dbname",
+}
+
+// looksCompanionKey gates inclusion of non-secret keys under a secret prefix.
+func looksCompanionKey(k string) bool {
+	leaf := k
+	if i := strings.LastIndexByte(k, '.'); i >= 0 {
+		leaf = k[i+1:]
+	}
+	normalized := strings.ToLower(leaf)
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	for _, s := range companionKeySuffixes {
+		if strings.Contains(normalized, s) {
 			return true
 		}
 	}

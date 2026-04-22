@@ -140,7 +140,7 @@ func extractDS(idx *heap.Index, objID uint64, t dsTarget, actualClassFQN string)
 
 	sev := SeverityMedium
 	if passwordVisible {
-		sev = SeverityCritical
+		sev = SeverityHigh
 	}
 
 	return &Finding{

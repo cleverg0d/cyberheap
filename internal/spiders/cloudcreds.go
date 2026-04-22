@@ -137,7 +137,7 @@ func (s *cloudCredsSpider) Sniff(idx *heap.Index) []Finding {
 				}
 				out = append(out, Finding{
 					Spider:   "cloudcreds",
-					Severity: SeverityCritical,
+					Severity: SeverityHigh,
 					Category: "cloud",
 					Title:    t.title,
 					ClassFQN: cls.Name,

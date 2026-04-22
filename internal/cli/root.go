@@ -4,7 +4,7 @@ import "github.com/spf13/cobra"
 
 // Version is injected at build time via -ldflags. The default reflects
 // the current source-tree version and is shown in the banner.
-var Version = "0.1.1"
+var Version = "0.1.2"
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{

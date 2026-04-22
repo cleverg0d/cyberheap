@@ -22,20 +22,20 @@ const (
 )
 
 // Finding is what a spider returns. Compared to scanner.Match it carries
-// structural context (ClassFQN, ObjectID) that we surface in the output and
-// in persisted reports.
+// structural context (ClassFQN, ObjectID) that we surface in the output.
 type Finding struct {
 	Spider   string
 	Severity Severity
 	Category string
-	Title    string // human-readable "what this is"
+	Title    string
 
-	ClassFQN string // Java class this instance belongs to
-	ObjectID uint64 // object ID in the heap — stable reference for re-scans
+	ClassFQN string
+	ObjectID uint64
 
-	// Fields holds the concrete values pulled from the instance.
-	// Order matters for display (slice of KV pairs rather than a map).
 	Fields []Field
+
+	// Flags are post-processor tags: "default-creds", "weak", etc.
+	Flags []string
 }
 
 // Field is a single name/value pair extracted from an instance.
@@ -61,5 +61,6 @@ func Registry() []Spider {
 		&envSpider{},
 		&jasyptSpider{},
 		&cloudCredsSpider{},
+		&authnSpider{},
 	}
 }

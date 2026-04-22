@@ -79,7 +79,7 @@ func (s *shiroSpider) Sniff(idx *heap.Index) []Finding {
 			}
 			out = append(out, Finding{
 				Spider:   "shiro",
-				Severity: SeverityCritical,
+				Severity: SeverityHigh,
 				Category: "shiro",
 				Title:    "Shiro RememberMe cipher key (RCE primitive)",
 				ClassFQN: cls.Name,

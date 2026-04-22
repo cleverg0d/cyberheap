@@ -151,7 +151,7 @@ var builtinPatterns = []*Pattern{
 	{
 		Name:         "jdbc-url-with-password",
 		Category:     CatDatasource,
-		Severity:     SeverityCritical,
+		Severity:     SeverityHigh,
 		re:           regexp.MustCompile(`jdbc:[a-z0-9:+]+://[\x20-\x7E]{1,400}?password=([^&\s"'<>\x00]{1,200})`),
 		captureGroup: 1,
 		maxLen:       512,
@@ -165,23 +165,30 @@ var builtinPatterns = []*Pattern{
 		// CSV/log lines into one bogus value.
 		Name:         "password-assignment",
 		Category:     CatCredentials,
-		Severity:     SeverityCritical,
+		Severity:     SeverityHigh,
 		re:           regexp.MustCompile(`(?i)(?:password|passwd|pwd|passphrase)\s*[=:]\s*["']?([A-Za-z0-9][^(){}\[\]\\\s"'<>\x00&;?,|]{3,127})`),
 		captureGroup: 1,
 		maxLen:       256,
 	},
 	{
-		Name:         "rsa-private-key",
-		Category:     CatPrivateKey,
-		Severity:     SeverityCritical,
-		re:           regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP |)PRIVATE KEY-----`),
+		Name:     "rsa-private-key",
+		Category: CatPrivateKey,
+		// Private keys are unconditionally critical: possession = full
+		// impersonation / decryption, no validation required.
+		Severity: SeverityCritical,
+		// Require the full PEM block (BEGIN + body + END). Header-only
+		// matches would be false positives — they're Spring Security
+		// error-message constants like "key must begin with -----BEGIN
+		// PRIVATE KEY-----". Real keys stored in a Java String have
+		// their bytes contiguous, so the strict regex catches them.
+		re:           regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP |)PRIVATE KEY-----[A-Za-z0-9+/=\s]+?-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP |)PRIVATE KEY-----`),
 		captureGroup: 0,
-		maxLen:       64,
+		maxLen:       16384,
 	},
 	{
 		Name:         "aws-secret-key-assignment",
 		Category:     CatCloud,
-		Severity:     SeverityCritical,
+		Severity:     SeverityHigh,
 		re:           regexp.MustCompile(`(?i)aws[_\-]?secret[_\-]?(?:access[_\-]?)?key\s*[=:]\s*["']?([A-Za-z0-9/+=]{40})(?:["']|\b)`),
 		captureGroup: 1,
 		maxLen:       256,
@@ -190,7 +197,7 @@ var builtinPatterns = []*Pattern{
 		// Spring Boot common: spring.datasource.password=xxx
 		Name:         "spring-datasource-password",
 		Category:     CatDatasource,
-		Severity:     SeverityCritical,
+		Severity:     SeverityHigh,
 		re:           regexp.MustCompile(`spring\.datasource(?:\.[a-z]+)*\.password\s*[=:]\s*["']?([^"'\s&<>\x00]{1,200})`),
 		captureGroup: 1,
 		maxLen:       256,
@@ -287,7 +294,7 @@ var builtinPatterns = []*Pattern{
 		// Source: https://developer.hashicorp.com/vault/docs/concepts/tokens
 		Name:         "vault-token",
 		Category:     CatCredentials,
-		Severity:     SeverityCritical,
+		Severity:     SeverityHigh,
 		re:           regexp.MustCompile(`\bhvs\.[A-Za-z0-9_\-]{20,100}\b`),
 		captureGroup: 0,
 		maxLen:       128,
@@ -366,7 +373,7 @@ var builtinPatterns = []*Pattern{
 		// Capture the password portion for inline display.
 		Name:         "url-embedded-auth",
 		Category:     CatCredentials,
-		Severity:     SeverityCritical,
+		Severity:     SeverityHigh,
 		re:           regexp.MustCompile(`\b(?:https?|ftp|git|ssh|ldaps?|jdbc:[a-z]+)://[A-Za-z0-9_\-.%]{1,64}:([A-Za-z0-9_\-.!*+~%]{3,100})@[A-Za-z0-9][A-Za-z0-9.\-]{1,253}\b`),
 		captureGroup: 1,
 		maxLen:       256,

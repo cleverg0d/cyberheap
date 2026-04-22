@@ -86,7 +86,7 @@ func TestScan_CatchesCommonSecrets(t *testing.T) {
 		"slack_bot_token=" + "xo" + "xb-1234567890-0987654321-" + strings.Repeat("a", 24),
 		"JWT=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSJ9.abc123defGHIJKL",
 		"contact_email=admin@example.com",
-		"-----BEGIN RSA PRIVATE KEY-----",
+		"-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\nKUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQ==\n-----END RSA PRIVATE KEY-----",
 		"redis_url=redis://default:pass123@cache.internal:6379/0",
 		"mongo=mongodb+srv://user:p@ss@cluster0.mongodb.net/db",
 		"Authorization: Bearer opaque-session-abcdef1234567890xyz",
@@ -122,19 +122,26 @@ func TestScan_CatchesCommonSecrets(t *testing.T) {
 }
 
 func TestScan_SeverityFilter(t *testing.T) {
-	corpus := []byte("AKIAIOSFODNN7EXAMPLE and email=a@b.co and -----BEGIN RSA PRIVATE KEY-----")
+	corpus := []byte("AKIAIOSFODNN7EXAMPLE and email=a@b.co and -----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\nKUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQ==\n-----END RSA PRIVATE KEY-----")
 
-	matches, err := Scan(bytes.NewReader(corpus), Options{
+	// Private keys are the only class pinned at CRITICAL by default
+	// (possession = impersonation, no validation required).
+	critical, err := Scan(bytes.NewReader(corpus), Options{
 		Severities: SeveritySet{SeverityCritical: true},
 	})
 	require.NoError(t, err)
+	assert.NotNil(t, findByName(critical, "rsa-private-key"))
 
-	for _, m := range matches {
-		assert.Equal(t, SeverityCritical, m.Pattern.Severity)
+	high, err := Scan(bytes.NewReader(corpus), Options{
+		Severities: SeveritySet{SeverityHigh: true},
+	})
+	require.NoError(t, err)
+	for _, m := range high {
+		assert.Equal(t, SeverityHigh, m.Pattern.Severity)
 	}
-	assert.NotNil(t, findByName(matches, "rsa-private-key"))
-	assert.Nil(t, findByName(matches, "aws-access-key-id"), "HIGH filtered out")
-	assert.Nil(t, findByName(matches, "email-address"), "LOW filtered out")
+	assert.NotNil(t, findByName(high, "aws-access-key-id"))
+	assert.Nil(t, findByName(high, "rsa-private-key"), "not HIGH, it's CRITICAL")
+	assert.Nil(t, findByName(high, "email-address"), "LOW filtered out")
 }
 
 func TestScan_Deduplicates(t *testing.T) {

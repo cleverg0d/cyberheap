@@ -298,7 +298,7 @@ func emitScanOverStrings(w io.Writer, items []stringEntry, tgt *target, f *strin
 
 	enriched := enrich(matches)
 	// Pretend we have a minimal scanFlags for printFinding reuse.
-	sf := &scanFlags{format: "pretty", noColor: f.noColor, maxValue: 200}
+	sf := &scanFlags{format: "pretty", noColor: f.noColor}
 	labelWidth := 0
 	for _, em := range enriched {
 		l := len(em.m.Pattern.Name) + 1
@@ -322,7 +322,7 @@ func emitScanOverStrings(w io.Writer, items []stringEntry, tgt *target, f *strin
 			fmt.Fprintln(w, sectionDivider(curSev, f.noColor))
 			fmt.Fprintln(w)
 		}
-		printFinding(w, em, sf, labelWidth, nil)
+		printFinding(w, em, sf, labelWidth, nil, nil)
 	}
 	return nil
 }
