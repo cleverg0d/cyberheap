@@ -509,6 +509,19 @@ var builtinPatterns = []*Pattern{
 		captureGroup: 1,
 		maxLen:       256,
 	},
+	{
+		// Session cookies buffered inside HTTP response bodies, Spring
+		// Session repos, or request wrappers still on the stack. Possession
+		// of an active session ID is an immediate impersonation primitive.
+		// 12+ alnum chars in the value to avoid doc-string false positives
+		// like "JSESSIONID=HTTP session cookie".
+		Name:         "session-cookie",
+		Category:     CatCredentials,
+		Severity:     SeverityHigh,
+		re:           regexp.MustCompile(`(?i)(?:JSESSIONID|PHPSESSID|laravel_session|XSRF-TOKEN|CSRF-TOKEN|remember_me|SESSION|ASP\.NET_SessionId|connect\.sid)=([A-Za-z0-9+/=_\-]{12,256})`),
+		captureGroup: 1,
+		maxLen:       512,
+	},
 
 	// ---------- MEDIUM ----------
 

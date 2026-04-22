@@ -61,6 +61,7 @@ func Registry() []Spider {
 		&envSpider{},
 		&jasyptSpider{},
 		&cloudCredsSpider{},
+		&jenkinsSpider{},
 		&authnSpider{},
 	}
 }

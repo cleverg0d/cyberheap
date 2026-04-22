@@ -51,10 +51,28 @@ Two scan passes feed both:
   char[] buffers (HTTP response bodies, serialization blobs,
   StringBuilder backings) and resolves each one. Use `--domain apex`
   to add extra apexes outside the finding set.
+- **DNS wildcard detection** — when 3+ distinct hostnames resolve to
+  the same IP, each is tagged `(wildcard)` so the operator doesn't
+  chase ghost targets served by a catch-all `*.apex` record.
+- **Actuator recon** — `cyberheap recon <host|url>` probes a curated
+  list of Spring Boot actuator / debug / Jolokia paths, reports the
+  live ones with a short pentest note, and auto-downloads + scans any
+  exposed `/actuator/heapdump`. Supports custom path prefixes
+  (`recon https://host/test/v1/`) and external wordlists (`-w FILE`).
 - **Default / weak credential tagging** — `admin/admin`, `root/root`,
   `tomcat/tomcat`, `postgres/postgres`, …  are tagged `[DEFAULT CREDS]`.
   Known-weak passwords (`password`, `qwerty`, `secret`, `Qwerty`,
   short <8 chars) get `[WEAK]`.
+- **Session-cookie capture** — `JSESSIONID`, `PHPSESSID`,
+  `XSRF-TOKEN`, `laravel_session`, `remember_me` and friends are
+  extracted from HTTP response buffers living in the heap.
+- **Jenkins credential extraction** — walks
+  `UsernamePasswordCredentialsImpl`, `StringCredentialsImpl`,
+  `BasicSSHUserPrivateKey`, `CertificateCredentialsImpl`,
+  `FileCredentialsImpl` and the `hudson.util.Secret` master key.
+  If the `CryptoConfidentialKey` AES key is present, inline-decrypts
+  V1 payloads; otherwise surfaces the base64 ciphertext for offline
+  decryption.
 - **Severity policy**: `CRITICAL` is reserved for findings that are
   **proven live** — private keys with a full PEM block, validated
   SaaS tokens, OAuth2 flows that actually returned an `access_token`.
@@ -64,6 +82,9 @@ Two scan passes feed both:
 - Persistent JSON reports (`-o DIR`) with merge-on-rerun, `first_seen`
   / `last_seen` / `runs` per finding.
 - Pretty terminal output, or `--format json` / `--format markdown`.
+- Short flag aliases throughout: `-V/--version`, `-s/--severity`,
+  `-c/--category`, `-f/--format`, `-m/--mask`, `-d/--domain`,
+  `-t/--timeout`, `-C/--verify-creds`, `-w/--wordlist`.
 
 ---
 
@@ -104,19 +125,19 @@ against the service that issued them.
 
 | Flag | Purpose |
 |------|---------|
-| `--format f`          | `pretty` (default), `json`, `markdown` |
-| `-o, --output DIR`    | Save/merge findings as JSON into `DIR/<target>.json` |
-| `--severity a,b`      | Filter: `critical,high,medium,low,info` |
-| `--category a,b`      | Filter: `datasource,credentials,cloud,scm,jwt,auth,connection-string,private-key,payment-saas,personal` |
-| `--min-count N`       | Drop findings seen fewer than N times |
-| `--mask`              | Mask secret values (for client-facing reports) |
-| `-v, --verbose`       | Show byte offsets; render full PEM / JWT / long tokens unchopped |
-| `--offline`           | Skip **all** network (no DNS, no TCP, no cred probes) |
-| `--verify-creds`      | Actively validate each cred/token against its service (1 attempt, public endpoints only) |
-| `--dns SERVER`        | DNS server for resolution (default `1.1.1.1`) |
-| `--timeout DURATION`  | Per-lookup timeout for DNS/TCP/HTTP (default `5s`) |
-| `--domain apex`       | Add apex domain(s) for subdomain enumeration. Auto-derived from finding hosts by default — only needed for apexes outside the dump's host set (repeatable, comma-separated) |
-| `--diff-against FILE` | Compare against earlier JSON — tag findings `+` / `=` / `-` |
+| `-f, --format f`       | `pretty` (default), `json`, `markdown` |
+| `-o, --output DIR`     | Save/merge findings as JSON into `DIR/<target>.json` |
+| `-s, --severity a,b`   | Filter: `critical,high,medium,low,info` |
+| `-c, --category a,b`   | Filter: `datasource,credentials,cloud,scm,jwt,auth,connection-string,private-key,payment-saas,personal` |
+| `--min-count N`        | Drop findings seen fewer than N times |
+| `-m, --mask`           | Mask secret values (for client-facing reports) |
+| `-v, --verbose`        | Show byte offsets; render full PEM / JWT / long tokens unchopped |
+| `--offline`            | Skip **all** network (no DNS, no TCP, no cred probes) |
+| `-C, --verify-creds`   | Actively validate each cred/token against its service (1 attempt, public endpoints only) |
+| `--dns SERVER`         | DNS server for resolution (default `1.1.1.1`) |
+| `-t, --timeout D`      | Per-lookup timeout for DNS/TCP/HTTP (default `5s`) |
+| `-d, --domain apex`    | Add apex domain(s) for subdomain enumeration. Auto-derived from finding hosts by default — only needed for apexes outside the dump's host set (repeatable, comma-separated) |
+| `--diff-against FILE`  | Compare against earlier JSON — tag findings `+` / `=` / `-` |
 
 Respects the `NO_COLOR` environment variable. Advanced flags for pass
 gating (`--no-regex`, `--no-spiders`, `--utf16`, `--no-header-check`,
@@ -129,6 +150,31 @@ Auto-selected paths (no flag needed):
   dump is ≥ 512 MiB.
 - Structured pass mmap's the file zero-copy when the dump is
   ≥ 256 MiB local.
+
+### `recon` — find exposed actuator / JMX endpoints and auto-scan
+
+```sh
+cyberheap recon <host|url>
+cyberheap recon example.com                             # probe 44 built-in paths
+cyberheap recon https://host/api/v1                     # custom mount point
+cyberheap recon host.com -w ~/SecLists/.../actuator.txt # external wordlist
+cyberheap recon host.com --show-auth                    # also list 401/403
+cyberheap recon host.com --no-auto-scan                 # discovery only
+cyberheap recon host.com -C                             # auto-scan + --verify-creds
+```
+
+Probes the target for Spring Boot actuator paths (both `/actuator/*`
+and legacy root-mounted `/env`, `/heapdump`), Jolokia (`/jolokia`,
+`/jolokia/list`), and common non-root mounts (`/management/actuator/*`,
+`/api/actuator/*`, `/admin/actuator/*`). Each 200-responding endpoint
+gets a short pentest note (`heapdump downloadable`, `Jolokia MBean
+bridge — see jolokia-exploitation-toolkit`, …). If `/actuator/heapdump`
+answers with a binary body, it's downloaded to a temp file and passed
+into the normal `scan` pipeline automatically.
+
+No RCE primitives are attempted — `/env` POST injection, `/gateway`
+route poisoning and Jolokia exploits are out of scope and should be
+handled with dedicated tools.
 
 ### `info` — dump metadata
 
@@ -190,7 +236,7 @@ cyberheap strings FILE --scan                # run secret catalogue only over re
 ```
 $ cyberheap scan ./heapdump
 ╔════════════════════════════════════════════════════╗
-║  v0.1.4  ·  HPROF secret scanner  ·  by clevergod  ║
+║  v0.1.5  ·  HPROF secret scanner  ·  by clevergod  ║
 ╚════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ EXECUTIVE SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -313,6 +359,13 @@ haven't proven exploitable.
 - **jasypt** — master passwords fed into `decrypt jasypt --auto`.
 - **cloudcreds** — AWS v1/v2, Aliyun OSS + Core SDK, Alibaba
   credentials-java, Huawei OBS, Tencent COS.
+- **jenkins** — Jenkins credentials plugin classes
+  (`UsernamePasswordCredentialsImpl`, `StringCredentialsImpl`,
+  `BasicSSHUserPrivateKey`, `CertificateCredentialsImpl`,
+  `FileCredentialsImpl`). Extracts id, description, username and the
+  `hudson.util.Secret` ciphertext. Harvests the Jenkins master AES key
+  from any `CryptoConfidentialKey` instance in the heap and decrypts
+  the Secret payload inline (V1 CBC + legacy ECB).
 - **authn** — heuristic sweep for user-app beans (e.g. controllers and
   services) that carry `password` / `secret` / `token` fields. Skips
   JDK and framework namespaces already owned by dedicated spiders.

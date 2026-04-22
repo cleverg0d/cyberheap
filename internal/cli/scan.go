@@ -67,24 +67,24 @@ temp file and deleted after the scan.`,
 		},
 	}
 	// Output shape.
-	cmd.Flags().StringVar(&f.format, "format", "pretty", "output format: pretty, json, markdown")
+	cmd.Flags().StringVarP(&f.format, "format", "f", "pretty", "output format: pretty, json, markdown")
 	cmd.Flags().StringVarP(&f.outputDir, "output", "o", "", "save/merge findings as JSON into DIR/<target>.json")
 
 	// Filtering.
-	cmd.Flags().StringSliceVar(&f.severities, "severity", nil, "filter by severity (comma-separated): critical,high,medium,low,info")
-	cmd.Flags().StringSliceVar(&f.categories, "category", nil, "filter by category (comma-separated)")
+	cmd.Flags().StringSliceVarP(&f.severities, "severity", "s", nil, "filter by severity (comma-separated): critical,high,medium,low,info")
+	cmd.Flags().StringSliceVarP(&f.categories, "category", "c", nil, "filter by category (comma-separated)")
 	cmd.Flags().IntVar(&f.minCount, "min-count", 1, "drop findings seen fewer than N times")
 
 	// Presentation.
-	cmd.Flags().BoolVar(&f.mask, "mask", false, "mask secret values (for client-facing reports)")
+	cmd.Flags().BoolVarP(&f.mask, "mask", "m", false, "mask secret values (for client-facing reports)")
 	cmd.Flags().BoolVarP(&f.verbose, "verbose", "v", false, "show byte offsets and raw values next to decoded findings")
 
 	// Network validation (default: passive DNS + TCP + JWT exp).
 	cmd.Flags().BoolVar(&f.offline, "offline", false, "skip ALL network (no DNS, no TCP, no cred probes)")
-	cmd.Flags().BoolVar(&f.doVerifyCreds, "verify-creds", false, "actively validate each leaked cred/token against its service (1 attempt, public endpoints only)")
+	cmd.Flags().BoolVarP(&f.doVerifyCreds, "verify-creds", "C", false, "actively validate each leaked cred/token against its service (1 attempt, public endpoints only)")
 	cmd.Flags().StringVar(&f.dnsServer, "dns", "1.1.1.1", "DNS server for host resolution")
-	cmd.Flags().DurationVar(&f.timeout, "timeout", 5*time.Second, "per-lookup timeout (DNS, TCP, HTTP)")
-	cmd.Flags().StringSliceVar(&f.apexes, "domain", nil, "enumerate and resolve every subdomain of this apex found in heap strings (repeatable, comma-separated)")
+	cmd.Flags().DurationVarP(&f.timeout, "timeout", "t", 5*time.Second, "per-lookup timeout (DNS, TCP, HTTP)")
+	cmd.Flags().StringSliceVarP(&f.apexes, "domain", "d", nil, "enumerate and resolve every subdomain of this apex found in heap strings (repeatable, comma-separated)")
 
 	// Retest.
 	cmd.Flags().StringVar(&f.diffAgainst, "diff-against", "", "compare against earlier JSON report — tag new (+), unchanged (=), closed (-)")
@@ -576,11 +576,10 @@ func buildApexRegex(apexes []string) *regexp.Regexp {
 	}
 	// Explicit non-hostname boundaries around the capture. \b on byte[]
 	// buffers fires on every 0x00 / binary byte, producing truncated
-	// matches like "aactions-test.halykfinance.kz" (missing the leading
-	// "m" because a null byte before it looks like a non-word). Using
+	// matches where a NUL or other control byte in front of a hostname
+	// looks like a non-word and the regex starts mid-label. Using
 	// [^a-z0-9._-] as the boundary is stricter: only real separators
-	// (punctuation, whitespace, control bytes the class doesn't include)
-	// can flank a hostname.
+	// (punctuation, whitespace) can flank a hostname.
 	pat := `(?:^|[^a-z0-9._-])((?:[a-z0-9][a-z0-9-]{0,62}\.)*(?:` +
 		strings.Join(quoted, "|") + `))(?:$|[^a-z0-9._-])`
 	return regexp.MustCompile(pat)

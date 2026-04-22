@@ -144,6 +144,32 @@ func TestScan_SeverityFilter(t *testing.T) {
 	assert.Nil(t, findByName(high, "email-address"), "LOW filtered out")
 }
 
+// TestScan_SessionCookie verifies capture of session IDs that bleed
+// into heap buffers via HTTP response bodies or Spring Session caches.
+// Each hit should fire as HIGH — session possession = immediate user
+// impersonation.
+func TestScan_SessionCookie(t *testing.T) {
+	corpus := []byte(strings.Join([]string{
+		"Set-Cookie: JSESSIONID=ABC123deadbeef0001; Path=/; HttpOnly",
+		"cookie: XSRF-TOKEN=tkn_abcdef1234567890xyz",
+		"phpsessid=0123456789abcdef0123",
+		"JSESSIONID=short", // too short — should NOT match (min 12)
+	}, "\n"))
+	matches, err := Scan(bytes.NewReader(corpus), Options{})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, m := range matches {
+		if m.Pattern.Name == "session-cookie" {
+			got[m.Value] = m.Pattern.Severity.String()
+		}
+	}
+	assert.Equal(t, "HIGH", got["ABC123deadbeef0001"])
+	assert.Equal(t, "HIGH", got["tkn_abcdef1234567890xyz"])
+	assert.Equal(t, "HIGH", got["0123456789abcdef0123"])
+	assert.NotContains(t, got, "short", "12-char min guards doc-string FP")
+}
+
 func TestScan_Deduplicates(t *testing.T) {
 	corpus := []byte(strings.Repeat("password=hunter22\n", 5))
 	matches, err := Scan(bytes.NewReader(corpus), Options{})

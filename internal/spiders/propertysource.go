@@ -1,11 +1,19 @@
 package spiders
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/cleverg0d/cyberheap/internal/heap"
 )
+
+// urlEmbeddedAuthRe matches URLs that carry credentials in the authority
+// (scheme://user:pass@host). Used to promote any property value with
+// embedded auth into a secret-prefix seed, regardless of its key name —
+// catches Eureka `eureka.client.serviceUrl.defaultZone=http://u:p@host/`
+// and similar Spring Cloud discovery configs.
+var urlEmbeddedAuthRe = regexp.MustCompile(`\b[a-z][a-z0-9+\-.]*://[^\s:/@"']{1,100}:[^\s@"']{1,200}@`)
 
 // propertySourceSpider harvests credentials from Spring's PropertySource
 // objects. Spring Boot loads application.properties / application.yml into
@@ -111,7 +119,7 @@ func (s *propertySourceSpider) Sniff(idx *heap.Index) []Finding {
 
 				secretPrefixes := map[string]bool{}
 				for _, p := range pairs {
-					if looksSecretKey(p.k) {
+					if looksSecretKey(p.k) || urlEmbeddedAuthRe.MatchString(p.v) {
 						secretPrefixes[propertyPrefix(p.k)] = true
 					}
 				}
@@ -124,7 +132,9 @@ func (s *propertySourceSpider) Sniff(idx *heap.Index) []Finding {
 					if !secretPrefixes[propertyPrefix(p.k)] {
 						continue
 					}
-					if !looksSecretKey(p.k) && !looksCompanionKey(p.k) {
+					if !looksSecretKey(p.k) &&
+						!looksCompanionKey(p.k) &&
+						!urlEmbeddedAuthRe.MatchString(p.v) {
 						continue
 					}
 					fields = append(fields, Field{Name: p.k, Value: p.v})
@@ -224,6 +234,10 @@ var companionKeySuffixes = []string{
 	"url", "uri", "baseurl", "endpointurl",
 	"scope", "realm", "issuer", "audience", "granttype", "grantflow",
 	"database", "schema", "dbname",
+	// Spring Cloud discovery / service-registry surface: expose sibling
+	// keys when ANY entry in the prefix carries embedded auth.
+	"defaultzone", "serviceurl", "servicepath",
+	"fetchregistry", "registerwitheureka",
 }
 
 // looksCompanionKey gates inclusion of non-secret keys under a secret prefix.

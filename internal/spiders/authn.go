@@ -45,6 +45,10 @@ var authnSkipPrefixes = []string{
 	"com.aliyuncs.",
 	"com.obs.services.",
 	"com.qcloud.cos.",
+	"hudson.",
+	"jenkins.",
+	"com.cloudbees.",
+	"org.jenkinsci.",
 
 	// Framework internals — carry connection metadata, rarely app creds
 	"org.hibernate.",
